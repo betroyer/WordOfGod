@@ -7,6 +7,7 @@ import '../../core/providers.dart';
 import '../../data/database/app_database.dart';
 import '../../data/repositories/bible_repository.dart';
 import '../../services/ai_service.dart';
+import '../../services/settings_service.dart';
 
 class AiAssistantScreen extends ConsumerStatefulWidget {
   const AiAssistantScreen({
@@ -32,6 +33,7 @@ class _AiAssistantScreenState extends ConsumerState<AiAssistantScreen> {
   List<AiMessage> _messages = [];
   bool _busy = false;
   String? _error;
+  bool _canRetryCompletion = false;
 
   @override
   void initState() {
@@ -41,16 +43,17 @@ class _AiAssistantScreenState extends ConsumerState<AiAssistantScreen> {
 
   Future<void> _bootstrap() async {
     if (widget.verseId != null) {
-      _verse = await ref.read(bibleRepositoryProvider).verseRefById(widget.verseId!);
+      _verse =
+          await ref.read(bibleRepositoryProvider).verseRefById(widget.verseId!);
     }
     if (widget.conversationId != null) {
       _conversationId = widget.conversationId;
-      _messages = await ref.read(aiRepositoryProvider).messages(_conversationId!);
+      _messages =
+          await ref.read(aiRepositoryProvider).messages(_conversationId!);
     }
-    setState(() {});
+    if (mounted) setState(() {});
     if (widget.prompt != null) {
-      _controller.text = widget.prompt!;
-      await _send();
+      await _send(preset: widget.prompt);
     }
   }
 
@@ -61,6 +64,7 @@ class _AiAssistantScreenState extends ConsumerState<AiAssistantScreen> {
     setState(() {
       _busy = true;
       _error = null;
+      _canRetryCompletion = false;
     });
     _controller.clear();
     try {
@@ -73,22 +77,14 @@ class _AiAssistantScreenState extends ConsumerState<AiAssistantScreen> {
         role: 'user',
         message: text,
       );
-      final history = await repo.messages(_conversationId!);
-      final reply = await ref.read(aiServiceProvider).complete(
-            settings: settings,
-            contextVerse: _verse,
-            messages: [
-              for (final m in history) {'role': m.role, 'content': m.message},
-            ],
-          );
-      await repo.addMessage(
-        conversationId: _conversationId!,
-        role: 'assistant',
-        message: reply,
-      );
-      _messages = await repo.messages(_conversationId!);
+      await _requestAssistantReply(settings);
     } catch (e) {
       _error = e.toString().replaceFirst('Bad state: ', '');
+      _canRetryCompletion = _conversationId != null;
+      if (_conversationId != null) {
+        _messages =
+            await ref.read(aiRepositoryProvider).messages(_conversationId!);
+      }
     } finally {
       if (mounted) {
         setState(() => _busy = false);
@@ -98,6 +94,54 @@ class _AiAssistantScreenState extends ConsumerState<AiAssistantScreen> {
         }
       }
     }
+  }
+
+  /// Retries the AI reply for the current conversation without adding another user message.
+  Future<void> _retryLast() async {
+    if (_busy || _conversationId == null) return;
+    final settings = ref.read(settingsProvider);
+    setState(() {
+      _busy = true;
+      _error = null;
+      _canRetryCompletion = false;
+    });
+    try {
+      await _requestAssistantReply(settings);
+    } catch (e) {
+      _error = e.toString().replaceFirst('Bad state: ', '');
+      _canRetryCompletion = true;
+      _messages =
+          await ref.read(aiRepositoryProvider).messages(_conversationId!);
+    } finally {
+      if (mounted) {
+        setState(() => _busy = false);
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        if (_scroll.hasClients) {
+          _scroll.jumpTo(_scroll.position.maxScrollExtent);
+        }
+      }
+    }
+  }
+
+  Future<void> _requestAssistantReply(AppSettings settings) async {
+    final repo = ref.read(aiRepositoryProvider);
+    final history = await repo.messages(_conversationId!);
+    // Only send up to the last user turn if the previous assistant reply failed.
+    final messages = <Map<String, String>>[
+      for (final m in history) {'role': m.role, 'content': m.message},
+    ];
+    final reply = await ref.read(aiServiceProvider).complete(
+          settings: settings,
+          contextVerse: _verse,
+          messages: messages,
+        );
+    await repo.addMessage(
+      conversationId: _conversationId!,
+      role: 'assistant',
+      message: reply,
+    );
+    _messages = await repo.messages(_conversationId!);
+    _canRetryCompletion = false;
   }
 
   @override
@@ -221,9 +265,25 @@ class _AiAssistantScreenState extends ConsumerState<AiAssistantScreen> {
           if (_error != null)
             Padding(
               padding: const EdgeInsets.all(12),
-              child: Text(
-                _error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    _error!,
+                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                  ),
+                  if (_canRetryCompletion) ...[
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: FilledButton.tonalIcon(
+                        onPressed: _busy ? null : _retryLast,
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('Retry AI reply'),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
           Expanded(

@@ -76,6 +76,11 @@ class SettingsController extends Notifier<AppSettings> {
     await ref.read(settingsServiceProvider).save(next);
     await ref.read(notificationServiceProvider).sync(next);
   }
+
+  Future<void> useGroqDefaults() async {
+    await ref.read(settingsServiceProvider).applyGroqDefaults();
+    state = ref.read(settingsServiceProvider).load();
+  }
 }
 
 final settingsProvider =

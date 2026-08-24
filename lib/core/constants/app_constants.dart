@@ -38,6 +38,11 @@ class AppConstants {
   static const copyrightNote =
       'The King James Version (1769) is in the public domain. '
       'Bible text is stored separately from application logic so it can be replaced.';
+
+  /// Default AI provider: Groq (OpenAI-compatible, free tier available).
+  static const aiBaseUrl = 'https://api.groq.com/openai/v1';
+  static const aiModel = 'llama-3.1-8b-instant';
+  static const aiProviderLabel = 'Groq';
 }
 
 class HighlightLooks {

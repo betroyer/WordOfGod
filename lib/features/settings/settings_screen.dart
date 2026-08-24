@@ -103,7 +103,7 @@ class SettingsScreen extends ConsumerWidget {
           SwitchListTile(
             title: const Text('Enable AI'),
             subtitle: const Text(
-              'Uses the internet to explain verses and answer Bible questions',
+              'Uses Groq (free tier) over the internet for Bible questions',
             ),
             value: settings.aiEnabled,
             onChanged: (v) => ref
@@ -111,15 +111,34 @@ class SettingsScreen extends ConsumerWidget {
                 .update(settings.copyWith(aiEnabled: v)),
           ),
           ListTile(
+            title: const Text('Use Groq defaults'),
+            subtitle: Text(
+              'Sets URL to ${AppConstants.aiBaseUrl} and model to ${AppConstants.aiModel}',
+            ),
+            trailing: const Icon(Icons.bolt_outlined),
+            onTap: () async {
+              await ref.read(settingsProvider.notifier).useGroqDefaults();
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Switched to Groq. Paste your Groq API key (gsk_...) below.',
+                    ),
+                  ),
+                );
+              }
+            },
+          ),
+          ListTile(
             title: const Text('API key'),
             subtitle: Text(
               settings.effectiveAiApiKey.isEmpty
-                  ? 'Required — paste your OpenAI-compatible key'
+                  ? 'Required — paste your Groq key from console.groq.com (gsk_...)'
                   : '•••••••• ready for online requests',
             ),
             onTap: () => _editText(
               context,
-              title: 'AI API key',
+              title: 'Groq API key',
               value: settings.aiApiKey,
               onSave: (v) => ref
                   .read(settingsProvider.notifier)

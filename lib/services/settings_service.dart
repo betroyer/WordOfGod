@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/constants/app_constants.dart';
 import '../core/secrets/ai_secrets.dart';
 
 class AppSettings {
@@ -99,14 +100,20 @@ class SettingsService {
   static const _model = 'aiModel';
   static const _book = 'lastBookId';
   static const _chapter = 'lastChapter';
+  static const _aiProviderVersion = 'aiProviderVersion';
+
+  /// Bump when default AI provider changes so existing installs migrate.
+  static const _currentAiProviderVersion = 2;
 
   AppSettings load() {
+    _migrateAiProviderIfNeeded();
+
     final themeName = _prefs.getString(_theme) ?? 'system';
     final savedKey = _prefs.getString(_key) ?? '';
-    final resolvedKey =
-        savedKey.trim().isNotEmpty ? savedKey : AiSecrets.apiKey.trim();
+    final secretKey = AiSecrets.apiKey.trim();
+    // Prefer a Groq-style key from secrets if the saved key still looks like OpenAI.
+    final resolvedKey = _resolveApiKey(savedKey, secretKey);
 
-    // Seed SharedPreferences once so Settings shows the key as configured.
     if (savedKey.trim().isEmpty && resolvedKey.isNotEmpty) {
       _prefs.setString(_key, resolvedKey);
     }
@@ -128,11 +135,67 @@ class SettingsService {
       reminderDaily: _prefs.getBool(_daily) ?? true,
       aiEnabled: _prefs.getBool(_ai) ?? true,
       aiApiKey: resolvedKey,
-      aiBaseUrl: _prefs.getString(_url) ?? 'https://api.openai.com/v1',
-      aiModel: _prefs.getString(_model) ?? 'gpt-4o-mini',
+      aiBaseUrl: _prefs.getString(_url) ?? AppConstants.aiBaseUrl,
+      aiModel: _prefs.getString(_model) ?? AppConstants.aiModel,
       lastBookId: _prefs.getInt(_book),
       lastChapter: _prefs.getInt(_chapter),
     );
+  }
+
+  void _migrateAiProviderIfNeeded() {
+    final version = _prefs.getInt(_aiProviderVersion) ?? 1;
+    if (version >= _currentAiProviderVersion) return;
+
+    final url = _prefs.getString(_url) ?? '';
+    final model = _prefs.getString(_model) ?? '';
+    final key = _prefs.getString(_key) ?? '';
+
+    final looksLikeOpenAi = url.contains('api.openai.com') ||
+        model.startsWith('gpt-') ||
+        url.isEmpty ||
+        model.isEmpty;
+
+    if (looksLikeOpenAi) {
+      _prefs.setString(_url, AppConstants.aiBaseUrl);
+      _prefs.setString(_model, AppConstants.aiModel);
+    }
+
+    // OpenAI keys won't authenticate against Groq.
+    if (_looksLikeOpenAiKey(key)) {
+      _prefs.setString(_key, '');
+    }
+
+    _prefs.setInt(_aiProviderVersion, _currentAiProviderVersion);
+  }
+
+  String _resolveApiKey(String savedKey, String secretKey) {
+    final saved = savedKey.trim();
+    final secret = secretKey.trim();
+
+    if (saved.isNotEmpty && !_looksLikeOpenAiKey(saved)) return saved;
+    if (secret.isNotEmpty && !_looksLikeOpenAiKey(secret)) return secret;
+    return '';
+  }
+
+  bool _looksLikeOpenAiKey(String key) {
+    final k = key.trim();
+    return k.startsWith('sk-proj-') ||
+        (k.startsWith('sk-') && !k.startsWith('gsk_'));
+  }
+
+  Future<void> applyGroqDefaults({String? apiKey}) async {
+    await _prefs.setString(_url, AppConstants.aiBaseUrl);
+    await _prefs.setString(_model, AppConstants.aiModel);
+    await _prefs.setBool(_ai, true);
+    await _prefs.setInt(_aiProviderVersion, _currentAiProviderVersion);
+    if (apiKey != null) {
+      await _prefs.setString(_key, apiKey.trim());
+    } else {
+      final current = _prefs.getString(_key) ?? '';
+      if (_looksLikeOpenAiKey(current)) {
+        await _prefs.setString(_key, '');
+      }
+    }
   }
 
   Future<void> save(AppSettings s) async {

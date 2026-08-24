@@ -1,11 +1,11 @@
 # FaithPath — Bible Study & Companion
 
-Flutter Bible app with offline Scripture study tools and an **online AI Bible Assistant**.
+Flutter Bible app with offline Scripture study tools and an **online AI Bible Assistant** (Groq free tier by default).
 
 ## How it works
 
 - **Bible reading, search, journals, plans** — work offline on your device
-- **AI Bible Assistant** — requires internet + an API key (OpenAI-compatible)
+- **AI Bible Assistant** — requires internet + a [Groq](https://console.groq.com) API key
 
 ## Stack
 
@@ -19,19 +19,17 @@ dart run build_runner build
 flutter run
 ```
 
-### AI with internet
+### AI setup (Groq)
 
-1. Open **Settings → AI Assistant**
-2. Keep **Enable AI** on (default)
-3. Paste your OpenAI-compatible API key
-4. Connect to Wi‑Fi / mobile data
-5. Open **Ask AI** from Home or a verse
+Defaults are already set to Groq:
 
-Or pass a key at launch:
+- Base URL: `https://api.groq.com/openai/v1`
+- Model: `llama-3.1-8b-instant`
 
-```bash
-flutter run --dart-define=FAITHPATH_AI_API_KEY=sk-your-key
-```
+1. Create a free key at https://console.groq.com/keys
+2. In the app: **Settings → AI Assistant → API key** (paste `gsk_...`)
+3. Or put it in gitignored `lib/core/secrets/ai_secrets.dart`
+4. Connect to Wi‑Fi / mobile data and open **Ask AI**
 
 ## GitHub
 

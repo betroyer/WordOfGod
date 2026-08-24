@@ -15,6 +15,7 @@ class SplashScreen extends ConsumerStatefulWidget {
 
 class _SplashScreenState extends ConsumerState<SplashScreen> {
   String _status = 'Preparing your Bible...';
+  bool _failed = false;
 
   @override
   void initState() {
@@ -23,14 +24,21 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
   }
 
   Future<void> _load() async {
+    setState(() {
+      _failed = false;
+      _status = 'Loading the King James Bible...';
+    });
     try {
-      setState(() => _status = 'Loading the King James Bible...');
       await ref.read(seederProvider).ensureSeeded();
       if (!mounted) return;
       context.go('/home');
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('Bible seed failed: $e\n$st');
       if (!mounted) return;
-      setState(() => _status = 'Could not load the Bible dataset.\n$e');
+      setState(() {
+        _failed = true;
+        _status = 'Could not load the Bible dataset.\n$e';
+      });
     }
   }
 
@@ -64,7 +72,12 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
                 ),
               ),
               const SizedBox(height: 36),
-              const CircularProgressIndicator(color: AppColors.gold),
+              if (!_failed) const CircularProgressIndicator(color: AppColors.gold),
+              if (_failed)
+                FilledButton(
+                  onPressed: _load,
+                  child: const Text('Try again'),
+                ),
               const SizedBox(height: 20),
               Text(
                 _status,

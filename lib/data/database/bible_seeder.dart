@@ -9,9 +9,44 @@ class BibleSeeder {
   BibleSeeder(this.db);
   final AppDatabase db;
 
+  /// Alternate names used in plans / UI vs the bundled KJV JSON.
+  static const _aliases = <String, String>{
+    'Psalm': 'Psalms',
+    'Psalms': 'Psalms',
+    'Song of Solomon': 'Song of Solomon',
+    'Song of Songs': 'Song of Solomon',
+    'Canticles': 'Song of Solomon',
+  };
+
   Future<void> ensureSeeded() async {
-    if (await db.verseCount() > 0) return;
+    final verses = await db.verseCount();
+    if (verses > 0) {
+      // Recover plans if a previous run seeded verses but failed on plans.
+      final plans = await db.select(db.readingPlans).get();
+      if (plans.isEmpty) {
+        final books = await db.select(db.bibleBooks).get();
+        final bookIds = {for (final b in books) b.name: b.id};
+        await _seedPlans(bookIds);
+      }
+      return;
+    }
+
+    // Incomplete failed seed: wipe Bible/plan tables and try again.
+    final books = await db.select(db.bibleBooks).get();
+    if (books.isNotEmpty) {
+      await _clearBibleTables();
+    }
     await seed();
+  }
+
+  Future<void> _clearBibleTables() async {
+    await db.transaction(() async {
+      await db.delete(db.readingPlanItems).go();
+      await db.delete(db.readingPlans).go();
+      await db.delete(db.bibleVerses).go();
+      await db.delete(db.bibleChapters).go();
+      await db.delete(db.bibleBooks).go();
+    });
   }
 
   Future<void> seed() async {
@@ -25,7 +60,9 @@ class BibleSeeder {
         final book = books[i] as Map<String, dynamic>;
         final name = book['name'] as String;
         final abbrev = book['abbrev'] as String;
-        final chapters = (book['chapters'] as List).cast<List<dynamic>>();
+        final chapters = (book['chapters'] as List)
+            .map((c) => (c as List).cast<dynamic>())
+            .toList();
         final testament = i < 39 ? 0 : 1;
 
         final bookId = await db
@@ -42,7 +79,7 @@ class BibleSeeder {
 
         final verseRows = <BibleVersesCompanion>[];
         for (var c = 0; c < chapters.length; c++) {
-          final verses = chapters[c].cast<dynamic>();
+          final verses = chapters[c];
           await db
               .into(db.bibleChapters)
               .insert(
@@ -65,7 +102,8 @@ class BibleSeeder {
         }
 
         for (var start = 0; start < verseRows.length; start += 400) {
-          final end = start + 400 > verseRows.length ? verseRows.length : start + 400;
+          final end =
+              start + 400 > verseRows.length ? verseRows.length : start + 400;
           await db.batch((b) {
             b.insertAll(db.bibleVerses, verseRows.sublist(start, end));
           });
@@ -74,6 +112,17 @@ class BibleSeeder {
 
       await _seedPlans(bookIds);
     });
+  }
+
+  int _requireBookId(Map<String, int> bookIds, String name) {
+    final canonical = _aliases[name] ?? name;
+    final id = bookIds[canonical] ?? bookIds[name];
+    if (id == null) {
+      throw StateError(
+        'Bible book "$name" (canonical: "$canonical") was not found in the dataset.',
+      );
+    }
+    return id;
   }
 
   Future<void> _seedPlans(Map<String, int> bookIds) async {
@@ -95,7 +144,7 @@ class BibleSeeder {
               ReadingPlanItemsCompanion.insert(
                 planId: planId,
                 dayNumber: i + 1,
-                bookId: bookIds[item.$1]!,
+                bookId: _requireBookId(bookIds, item.$1),
                 chapter: item.$2,
               ),
             );
@@ -108,8 +157,8 @@ class BibleSeeder {
       items: const [
         ('Genesis', 1),
         ('Genesis', 2),
-        ('Psalm', 1),
-        ('Psalm', 23),
+        ('Psalms', 1),
+        ('Psalms', 23),
         ('John', 1),
         ('John', 3),
         ('Matthew', 5),
@@ -197,7 +246,7 @@ class BibleSeeder {
     ];
     final ntItems = <(String, int)>[];
     for (final name in ntBooks) {
-      final bookId = bookIds[name]!;
+      final bookId = _requireBookId(bookIds, name);
       final chapters = await (db.select(db.bibleChapters)
             ..where((t) => t.bookId.equals(bookId)))
           .get();
@@ -214,7 +263,7 @@ class BibleSeeder {
 
     final gospelItems = <(String, int)>[];
     for (final name in ['Matthew', 'Mark', 'Luke', 'John']) {
-      final bookId = bookIds[name]!;
+      final bookId = _requireBookId(bookIds, name);
       final chapters = await (db.select(db.bibleChapters)
             ..where((t) => t.bookId.equals(bookId)))
           .get();

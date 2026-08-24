@@ -40,9 +40,17 @@ class AppConstants {
       'Bible text is stored separately from application logic so it can be replaced.';
 
   /// Default AI provider: Groq (OpenAI-compatible, free tier available).
+  /// Note: llama-3.1-8b-instant was retired by Groq on 2026-08-16.
   static const aiBaseUrl = 'https://api.groq.com/openai/v1';
-  static const aiModel = 'llama-3.1-8b-instant';
+  static const aiModel = 'llama-3.3-70b-versatile';
   static const aiProviderLabel = 'Groq';
+
+  static const groqModelChoices = <String>[
+    'llama-3.3-70b-versatile',
+    'openai/gpt-oss-20b',
+    'openai/gpt-oss-120b',
+    'meta-llama/llama-4-scout-17b-16e-instruct',
+  ];
 }
 
 class HighlightLooks {

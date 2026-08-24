@@ -24,7 +24,9 @@ flutter run
 Defaults are already set to Groq:
 
 - Base URL: `https://api.groq.com/openai/v1`
-- Model: `llama-3.1-8b-instant`
+- Model: `llama-3.3-70b-versatile`
+
+> Note: `llama-3.1-8b-instant` was retired by Groq on 2026-08-16.
 
 1. Create a free key at https://console.groq.com/keys
 2. In the app: **Settings → AI Assistant → API key** (paste `gsk_...`)

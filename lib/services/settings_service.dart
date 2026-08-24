@@ -102,8 +102,8 @@ class SettingsService {
   static const _chapter = 'lastChapter';
   static const _aiProviderVersion = 'aiProviderVersion';
 
-  /// Bump when default AI provider changes so existing installs migrate.
-  static const _currentAiProviderVersion = 2;
+  /// Bump when default AI provider/model changes so existing installs migrate.
+  static const _currentAiProviderVersion = 3;
 
   AppSettings load() {
     _migrateAiProviderIfNeeded();
@@ -111,14 +111,22 @@ class SettingsService {
     final themeName = _prefs.getString(_theme) ?? 'system';
     final savedKey = _prefs.getString(_key) ?? '';
     final secretKey = AiSecrets.apiKey.trim();
-    // Prefer a Groq-style key from secrets if the saved key still looks like OpenAI.
     final resolvedKey = _resolveApiKey(savedKey, secretKey);
 
-    if (savedKey.trim().isEmpty && resolvedKey.isNotEmpty) {
+    if ((savedKey.trim().isEmpty || _looksLikeOpenAiKey(savedKey)) &&
+        resolvedKey.isNotEmpty) {
       _prefs.setString(_key, resolvedKey);
     }
     if (!_prefs.containsKey(_ai)) {
       _prefs.setBool(_ai, true);
+    }
+
+    var url = _prefs.getString(_url) ?? AppConstants.aiBaseUrl;
+    var model = _prefs.getString(_model) ?? AppConstants.aiModel;
+    url = _normalizeBaseUrl(url);
+    if (_isRetiredModel(model)) {
+      model = AppConstants.aiModel;
+      _prefs.setString(_model, model);
     }
 
     return AppSettings(
@@ -135,8 +143,8 @@ class SettingsService {
       reminderDaily: _prefs.getBool(_daily) ?? true,
       aiEnabled: _prefs.getBool(_ai) ?? true,
       aiApiKey: resolvedKey,
-      aiBaseUrl: _prefs.getString(_url) ?? AppConstants.aiBaseUrl,
-      aiModel: _prefs.getString(_model) ?? AppConstants.aiModel,
+      aiBaseUrl: url,
+      aiModel: model,
       lastBookId: _prefs.getInt(_book),
       lastChapter: _prefs.getInt(_chapter),
     );
@@ -144,28 +152,53 @@ class SettingsService {
 
   void _migrateAiProviderIfNeeded() {
     final version = _prefs.getInt(_aiProviderVersion) ?? 1;
-    if (version >= _currentAiProviderVersion) return;
-
-    final url = _prefs.getString(_url) ?? '';
-    final model = _prefs.getString(_model) ?? '';
-    final key = _prefs.getString(_key) ?? '';
-
-    final looksLikeOpenAi = url.contains('api.openai.com') ||
-        model.startsWith('gpt-') ||
-        url.isEmpty ||
-        model.isEmpty;
-
-    if (looksLikeOpenAi) {
-      _prefs.setString(_url, AppConstants.aiBaseUrl);
-      _prefs.setString(_model, AppConstants.aiModel);
+    if (version >= _currentAiProviderVersion) {
+      // Still repair retired models even after migration version is current.
+      final model = _prefs.getString(_model) ?? '';
+      if (_isRetiredModel(model)) {
+        _prefs.setString(_model, AppConstants.aiModel);
+      }
+      return;
     }
 
-    // OpenAI keys won't authenticate against Groq.
+    _prefs.setString(_url, AppConstants.aiBaseUrl);
+    _prefs.setString(_model, AppConstants.aiModel);
+
+    final key = _prefs.getString(_key) ?? '';
     if (_looksLikeOpenAiKey(key)) {
       _prefs.setString(_key, '');
     }
 
     _prefs.setInt(_aiProviderVersion, _currentAiProviderVersion);
+  }
+
+  bool _isRetiredModel(String model) {
+    const retired = {
+      'llama-3.1-8b-instant',
+      'llama3-8b-8192',
+      'llama3-70b-8192',
+      'mixtral-8x7b-32768',
+      'gemma-7b-it',
+      'gemma2-9b-it',
+      'gpt-4o-mini',
+      'gpt-4o',
+      'gpt-3.5-turbo',
+    };
+    return retired.contains(model.trim());
+  }
+
+  String _normalizeBaseUrl(String raw) {
+    var url = raw.trim();
+    if (url.isEmpty) return AppConstants.aiBaseUrl;
+    while (url.endsWith('/')) {
+      url = url.substring(0, url.length - 1);
+    }
+    for (final suffix in ['/chat/completions', '/completions']) {
+      if (url.endsWith(suffix)) {
+        url = url.substring(0, url.length - suffix.length);
+      }
+    }
+    return url;
   }
 
   String _resolveApiKey(String savedKey, String secretKey) {

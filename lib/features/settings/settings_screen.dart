@@ -113,7 +113,7 @@ class SettingsScreen extends ConsumerWidget {
           ListTile(
             title: const Text('Use Groq defaults'),
             subtitle: Text(
-              'Sets URL to ${AppConstants.aiBaseUrl} and model to ${AppConstants.aiModel}',
+              'URL + current model (${AppConstants.aiModel})',
             ),
             trailing: const Icon(Icons.bolt_outlined),
             onTap: () async {
@@ -140,9 +140,9 @@ class SettingsScreen extends ConsumerWidget {
               context,
               title: 'Groq API key',
               value: settings.aiApiKey,
-              onSave: (v) => ref
-                  .read(settingsProvider.notifier)
-                  .update(settings.copyWith(aiApiKey: v)),
+              onSave: (v) => ref.read(settingsProvider.notifier).update(
+                    settings.copyWith(aiApiKey: v.trim()),
+                  ),
             ),
           ),
           ListTile(
@@ -152,22 +152,60 @@ class SettingsScreen extends ConsumerWidget {
               context,
               title: 'API base URL',
               value: settings.aiBaseUrl,
-              onSave: (v) => ref
-                  .read(settingsProvider.notifier)
-                  .update(settings.copyWith(aiBaseUrl: v)),
+              onSave: (v) => ref.read(settingsProvider.notifier).update(
+                    settings.copyWith(aiBaseUrl: v.trim()),
+                  ),
             ),
           ),
           ListTile(
             title: const Text('Model'),
             subtitle: Text(settings.aiModel),
-            onTap: () => _editText(
-              context,
-              title: 'Model',
-              value: settings.aiModel,
-              onSave: (v) => ref
-                  .read(settingsProvider.notifier)
-                  .update(settings.copyWith(aiModel: v)),
-            ),
+            onTap: () async {
+              final selected = await showModalBottomSheet<String>(
+                context: context,
+                showDragHandle: true,
+                builder: (context) => SafeArea(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: [
+                      const ListTile(
+                        title: Text('Choose a Groq model'),
+                        subtitle: Text(
+                          'llama-3.1-8b-instant was retired by Groq — use one of these',
+                        ),
+                      ),
+                      for (final model in AppConstants.groqModelChoices)
+                        ListTile(
+                          title: Text(model),
+                          trailing: model == settings.aiModel
+                              ? const Icon(Icons.check)
+                              : null,
+                          onTap: () => Navigator.pop(context, model),
+                        ),
+                      ListTile(
+                        title: const Text('Enter custom model...'),
+                        onTap: () => Navigator.pop(context, '__custom__'),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+              if (selected == null || !context.mounted) return;
+              if (selected == '__custom__') {
+                await _editText(
+                  context,
+                  title: 'Model',
+                  value: settings.aiModel,
+                  onSave: (v) => ref.read(settingsProvider.notifier).update(
+                        settings.copyWith(aiModel: v.trim()),
+                      ),
+                );
+              } else {
+                await ref.read(settingsProvider.notifier).update(
+                      settings.copyWith(aiModel: selected),
+                    );
+              }
+            },
           ),
           ListTile(
             title: const Text('Clear AI history'),

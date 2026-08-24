@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 
+import '../core/constants/app_constants.dart';
 import '../data/repositories/bible_repository.dart';
 import 'network_service.dart';
 import 'settings_service.dart';
@@ -31,9 +32,11 @@ Be respectful, clear, and pastoral. Quote the provided KJV text when it is given
     if (!settings.aiEnabled) {
       throw StateError('AI is disabled in Settings.');
     }
-    if (settings.effectiveAiApiKey.isEmpty) {
+
+    final apiKey = _sanitizeApiKey(settings.effectiveAiApiKey);
+    if (apiKey.isEmpty) {
       throw StateError(
-        'Add an AI API key in Settings to use the assistant online.',
+        'Add your Groq API key in Settings (console.groq.com/keys). It usually starts with gsk_.',
       );
     }
 
@@ -44,30 +47,38 @@ Be respectful, clear, and pastoral. Quote the provided KJV text when it is given
       );
     }
 
-    final payloadMessages = <Map<String, String>>[
-      {'role': 'system', 'content': systemPrompt},
-    ];
+    final baseUrl = _sanitizeBaseUrl(settings.aiBaseUrl);
+    var model = settings.aiModel.trim();
+    if (model.isEmpty || _isRetiredGroqModel(model)) {
+      model = AppConstants.aiModel;
+    }
+
+    // Groq is happier with a single system message.
+    final systemParts = <String>[systemPrompt];
     if (contextVerse != null) {
-      payloadMessages.add({
-        'role': 'system',
-        'content':
-            'Selected passage context: ${contextVerse.reference}\n"${contextVerse.verse.content}"',
-      });
+      systemParts.add(
+        'Selected passage context: ${contextVerse.reference}\n"${contextVerse.verse.content}"',
+      );
     }
-    if (extraInstruction != null) {
-      payloadMessages.add({'role': 'system', 'content': extraInstruction});
+    if (extraInstruction != null && extraInstruction.trim().isNotEmpty) {
+      systemParts.add(extraInstruction.trim());
     }
-    payloadMessages.addAll(messages);
+
+    final payloadMessages = <Map<String, String>>[
+      {'role': 'system', 'content': systemParts.join('\n\n')},
+      ...messages,
+    ];
 
     final dio = Dio(
       BaseOptions(
-        baseUrl: settings.aiBaseUrl.replaceAll(RegExp(r'/$'), ''),
+        baseUrl: baseUrl,
         headers: {
-          'Authorization': 'Bearer ${settings.effectiveAiApiKey}',
+          'Authorization': 'Bearer $apiKey',
           'Content-Type': 'application/json',
         },
         connectTimeout: const Duration(seconds: 20),
         receiveTimeout: const Duration(seconds: 90),
+        validateStatus: (code) => code != null && code < 500,
       ),
     );
 
@@ -79,16 +90,30 @@ Be respectful, clear, and pastoral. Quote the provided KJV text when it is given
         final response = await dio.post<Map<String, dynamic>>(
           '/chat/completions',
           data: {
-            'model': settings.aiModel,
+            'model': model,
             'messages': payloadMessages,
             'temperature': 0.4,
             'max_tokens': 900,
           },
         );
+
+        final status = response.statusCode ?? 0;
+        if (status == 401 || status == 403 || status == 404 || status == 400 || status == 429) {
+          throw DioException(
+            requestOptions: response.requestOptions,
+            response: response,
+            type: DioExceptionType.badResponse,
+          );
+        }
+
         final choices = response.data?['choices'] as List<dynamic>?;
         final content = choices?.firstOrNull?['message']?['content'] as String?;
         if (content == null || content.trim().isEmpty) {
-          throw StateError('The AI returned an empty response.');
+          final apiMessage = _extractApiMessage(response.data);
+          throw StateError(
+            apiMessage ??
+                'The AI returned an empty response. Try another Groq model in Settings.',
+          );
         }
         return content.trim();
       } on DioException catch (e) {
@@ -100,15 +125,59 @@ Be respectful, clear, and pastoral. Quote the provided KJV text when it is given
             e.type == DioExceptionType.receiveTimeout;
 
         if (shouldRetry && attempt < maxAttempts) {
-          final wait = _retryDelay(e, attempt);
-          await Future<void>.delayed(wait);
+          await Future<void>.delayed(_retryDelay(e, attempt));
           continue;
         }
-        throw StateError(_describeDioError(e));
+        throw StateError(_describeDioError(e, model: model, baseUrl: baseUrl));
       }
     }
 
-    throw StateError(_describeDioError(lastError!));
+    throw StateError(
+      _describeDioError(lastError!, model: model, baseUrl: baseUrl),
+    );
+  }
+
+  String _sanitizeApiKey(String raw) {
+    var key = raw.trim();
+    if (key.toLowerCase().startsWith('bearer ')) {
+      key = key.substring(7).trim();
+    }
+    if ((key.startsWith('"') && key.endsWith('"')) ||
+        (key.startsWith("'") && key.endsWith("'"))) {
+      key = key.substring(1, key.length - 1).trim();
+    }
+    return key;
+  }
+
+  String _sanitizeBaseUrl(String raw) {
+    var url = raw.trim();
+    if (url.isEmpty) return AppConstants.aiBaseUrl;
+    while (url.endsWith('/')) {
+      url = url.substring(0, url.length - 1);
+    }
+    // Users sometimes paste the full chat path.
+    const suffixes = ['/chat/completions', '/completions'];
+    for (final suffix in suffixes) {
+      if (url.endsWith(suffix)) {
+        url = url.substring(0, url.length - suffix.length);
+      }
+    }
+    if (!url.contains('://')) {
+      url = 'https://$url';
+    }
+    return url;
+  }
+
+  bool _isRetiredGroqModel(String model) {
+    const retired = {
+      'llama-3.1-8b-instant',
+      'llama3-8b-8192',
+      'llama3-70b-8192',
+      'mixtral-8x7b-32768',
+      'gemma-7b-it',
+      'gemma2-9b-it',
+    };
+    return retired.contains(model.trim());
   }
 
   Duration _retryDelay(DioException e, int attempt) {
@@ -119,14 +188,17 @@ Be respectful, clear, and pastoral. Quote the provided KJV text when it is given
         return Duration(seconds: seconds.clamp(1, 30));
       }
     }
-    // 2s, 4s, 8s
     return Duration(seconds: 1 << attempt);
   }
 
-  String _describeDioError(DioException e) {
+  String _describeDioError(
+    DioException e, {
+    required String model,
+    required String baseUrl,
+  }) {
     if (e.type == DioExceptionType.connectionError ||
         e.type == DioExceptionType.connectionTimeout) {
-      return 'Could not reach the AI service. Check your internet connection and try again.';
+      return 'Could not reach Groq. Check your internet connection and try again.';
     }
 
     final status = e.response?.statusCode;
@@ -134,31 +206,31 @@ Be respectful, clear, and pastoral. Quote the provided KJV text when it is given
 
     switch (status) {
       case 401:
-        return 'AI authentication failed (401). Your API key may be invalid or revoked. '
-            'Create a new key in OpenAI and update Settings.';
+        return 'Groq authentication failed (401). Paste a valid Groq key from '
+            'console.groq.com/keys (usually starts with gsk_).'
+            '${apiMessage != null ? '\n\n$apiMessage' : ''}';
       case 403:
-        return 'AI access denied (403). Check that your API key is allowed to use this model.';
+        return 'Groq access denied (403). Your key may not be allowed for this model.'
+            '${apiMessage != null ? '\n\n$apiMessage' : ''}';
       case 404:
-        return 'AI endpoint or model not found (404). Check the base URL and model name in Settings.';
+        return 'Groq endpoint or model not found (404).\n'
+            'URL: $baseUrl\nModel: $model\n'
+            'Tap “Use Groq defaults” in Settings, or pick a current model.'
+            '${apiMessage != null ? '\n\n$apiMessage' : ''}';
+      case 400:
+        return 'Groq rejected the request (400). The model "$model" may be retired '
+            'or invalid. Tap “Use Groq defaults” in Settings.'
+            '${apiMessage != null ? '\n\n$apiMessage' : ''}';
       case 429:
-        if (apiMessage != null &&
-            (apiMessage.toLowerCase().contains('quota') ||
-                apiMessage.toLowerCase().contains('billing') ||
-                apiMessage.toLowerCase().contains('insufficient'))) {
-          return 'AI quota exceeded (429). Your OpenAI account needs billing credit '
-              'or a higher usage limit. Add payment at platform.openai.com, wait a minute, then try again.\n\n'
-              '$apiMessage';
-        }
-        return 'AI rate limit reached (429). Too many requests right now. '
-            'Wait a few seconds and tap Retry.'
+        return 'Groq rate limit reached (429). Wait a few seconds and tap Retry.'
             '${apiMessage != null ? '\n\n$apiMessage' : ''}';
       case 500:
       case 502:
       case 503:
-        return 'The AI service is temporarily unavailable ($status). Try again shortly.';
+        return 'Groq is temporarily unavailable ($status). Try again shortly.';
       default:
         return 'AI request failed${status != null ? ' ($status)' : ''}.'
-            '${apiMessage != null ? '\n$apiMessage' : ' Check your API key, model, and endpoint in Settings.'}';
+            '${apiMessage != null ? '\n$apiMessage' : ' Check Groq API key, URL, and model in Settings.'}';
     }
   }
 
